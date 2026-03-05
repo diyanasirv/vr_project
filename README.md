@@ -101,7 +101,7 @@ The application uses WebGL 3D graphics to create a realistic indoor environment 
 ### Project Structure
 ```
 vr_project/
-├── vr.html          # Main application file
+├── index.html          # Main application file
 ├── README.md        # This file
 └── vr_project/      # Subdirectory (for future expansion)
 ```
