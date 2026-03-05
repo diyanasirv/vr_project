@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>AR/VR Emergency Response Trainer (Three.js)</title>
+    <!-- Three.js Core and Addons -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        #webgl-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* UI Overlay */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+            z-index: 10;
+        }
+
+        #instruction-panel {
+            background: rgba(0, 0, 0, 0.7);
+            border-inline-start: 5px solid #E74C3C;
+            padding: 20px;
+            border-radius: 5px;
+            color: white;
+            width: 350px;
+            text-shadow: 1px 1px 2px black;
+            transition: border-color 0.3s;
+        }
+
+        #instruction-title {
+            font-size: 1.2rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #F1C40F;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        #instruction-text {
+            font-size: 1rem;
+            line-height: 1.5;
+            color: #ECF0F1;
+        }
+
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 10px;
+            height: 10px;
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+            border: 2px solid rgba(255, 255, 255, 0.8);
+            background-color: transparent;
+            transition: all 0.2s;
+            pointer-events: none;
+        }
+
+        #crosshair.active {
+            border-color: #2ECC71;
+            background-color: rgba(46, 204, 113, 0.5);
+            transform: translate(-50%, -50%) scale(1.5);
+        }
+
+        #progress-container {
+            width: 350px;
+            height: 10px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 5px;
+            overflow: hidden;
+            margin-top: 15px;
+            display: none;
+        }
+
+        #progress-bar {
+            width: 100%;
+            height: 100%;
+            background: #3498DB;
+            transition: width 0.1s linear;
+        }
+
+        #blocker {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            z-index: 20;
+            pointer-events: auto;
+        }
+
+        #play-button {
+            padding: 15px 30px;
+            font-size: 1.5rem;
+            background-color: #E74C3C;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            text-transform: uppercase;
+            font-weight: bold;
+            letter-spacing: 2px;
+            transition: background-color 0.2s;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        #play-button:hover {
+            background-color: #C0392B;
+        }
+
+        .controls-info {
+            margin-top: 20px;
+            opacity: 0.7;
+            font-size: 0.9rem;
+            text-align: center;
+            line-height: 1.6;
+        }
+
+        #vr-button {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            background: rgba(0, 0, 0, 0.5);
+            color: white;
+            border: 1px solid white;
+            border-radius: 5px;
+            cursor: pointer;
+            pointer-events: auto;
+            z-index: 10;
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="webgl-container"></div>
+
+    <div id="ui-layer">
+        <div id="instruction-panel">
+            <div id="instruction-title">Step 1: Identify Hazard</div>
+            <div id="instruction-text">Find the source of the fire in the room and inspect it closely.</div>
+            <div id="progress-container">
+                <div id="progress-bar"></div>
+            </div>
+        </div>
+        <div id="crosshair"></div>
+        <button id="vr-button">ENTER VR</button>
+    </div>
+
+    <div id="blocker">
+        <h1 style="color: #E74C3C; margin-bottom: 20px; font-size: 3rem; text-shadow: 0 0 10px rgba(231,76,60,0.5);">
+            AR/VR EMERGENCY TRAINER</h1>
+        <button id="play-button">Start Simulation</button>
+        <div class="controls-info">
+            <strong>CONTROLS:</strong><br>
+            W A S D - Move<br>
+            Mouse - Look Around<br>
+            Left Click - Interact / Use Item<br>
+            ESC - Pause
+        </div>
+    </div>
+
+    <script>
+        // --- Game Logic & Globals ---
+        let camera, scene, renderer, controls;
+        let pLight1, pLight2; // Alarm lights
+
+        // Physics and Movement
+        const velocity = new THREE.Vector3();
+        const direction = new THREE.Vector3();
+        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+        let prevTime = performance.now();
+
+        // Raycaster for interactions
+        const raycaster = new THREE.Raycaster();
+        let interactableObjects = [];
+        let hoveredObject = null;
+
+        // Particle Systems
+        let fireParticles, smokeParticles;
+        const fireSystem = { active: true, health: 100, meshes: [] };
+
+        // Audio (Using HTML5 Audio elements instead of Three AudioListener for simplicity & browser policy)
+        const sounds = {
+            alarm: new Audio('https://cdn.pixabay.com/download/audio/2021/08/04/audio_338a0a9ac5.mp3?filename=fire-alarm-33755.mp3'),
+            extinguisher: new Audio('https://cdn.pixabay.com/download/audio/2022/03/10/audio_24e9b986b4.mp3?filename=spray-paint-shaking-and-spraying-6715.mp3')
+        };
+        sounds.alarm.loop = true;
+        sounds.extinguisher.loop = true;
+
+        // State Machine
+        const state = {
+            step: 0,
+            hasAlarm: false,
+            hasExtinguisher: false,
+            fireOut: false,
+            evacuated: false
+        };
+
+        // UI Elements
+        const uiPanel = document.getElementById('instruction-panel');
+        const uiTitle = document.getElementById('instruction-title');
+        const uiText = document.getElementById('instruction-text');
+        const crosshair = document.getElementById('crosshair');
+        const progContainer = document.getElementById('progress-container');
+        const progBar = document.getElementById('progress-bar');
+
+        // Game Objects refs
+        const gameObjects = { alarm: null, extinguisher: null, fireZone: null, safeZone: null, extHand: null };
+
+        init();
+        animate();
+
+        function init() {
+            // 1. Setup Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xddebf7); // Light sky blue/indoor bright color
+            scene.fog = new THREE.FogExp2(0xddebf7, 0.02); // Lighter fog for depth without darkness
+
+            // 2. Setup Camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.y = 1.6; // Eye level
+
+            // 3. Setup Renderer (with WebXR support)
+            renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.xr.enabled = true;
+            document.getElementById('webgl-container').appendChild(renderer.domElement);
+
+            // Check VR support
+            if ('xr' in navigator) {
+                navigator.xr.isSessionSupported('immersive-vr').then(supported => {
+                    if (supported) {
+                        const vrBtn = document.getElementById('vr-button');
+                        vrBtn.style.display = 'block';
+                        vrBtn.addEventListener('click', () => {
+                            navigator.xr.requestSession('immersive-vr').then(session => {
+                                renderer.xr.setSession(session);
+                            });
+                        });
+                    }
+                });
+            }
+
+            // 4. Setup Controls (First Person Pointer Lock)
+            controls = new THREE.PointerLockControls(camera, document.body);
+            const blocker = document.getElementById('blocker');
+            const playBtn = document.getElementById('play-button');
+
+            playBtn.addEventListener('click', () => controls.lock());
+            controls.addEventListener('lock', () => blocker.style.display = 'none');
+            controls.addEventListener('unlock', () => blocker.style.display = 'flex');
+
+            scene.add(controls.getObject());
+
+            // Keyboard listeners
+            const onKeyDown = function (event) {
+                switch (event.code) {
+                    case 'ArrowUp': case 'KeyW': moveForward = true; break;
+                    case 'ArrowLeft': case 'KeyA': moveLeft = true; break;
+                    case 'ArrowDown': case 'KeyS': moveBackward = true; break;
+                    case 'ArrowRight': case 'KeyD': moveRight = true; break;
+                }
+            };
+            const onKeyUp = function (event) {
+                switch (event.code) {
+                    case 'ArrowUp': case 'KeyW': moveForward = false; break;
+                    case 'ArrowLeft': case 'KeyA': moveLeft = false; break;
+                    case 'ArrowDown': case 'KeyS': moveBackward = false; break;
+                    case 'ArrowRight': case 'KeyD': moveRight = false; break;
+                }
+            };
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            document.addEventListener('mousedown', onMouseClick);
+            document.addEventListener('mouseup', onMouseUp);
+
+            // 5. Build Environment Structure
+            buildRoom();
+            buildLighting();
+            buildInteractiveObjects();
+            buildParticleSystems();
+
+            // Handle Resize
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function buildRoom() {
+            // Floor
+            const floorGeo = new THREE.PlaneGeometry(30, 30, 10, 10);
+            const floorMat = new THREE.MeshStandardMaterial({ color: 0xe0e0e0, roughness: 0.8, metalness: 0.1 }); // Light grey floor
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            scene.add(floor);
+
+            // Ceiling
+            const ceiling = new THREE.Mesh(floorGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1.0 })); // White ceiling
+            ceiling.position.y = 4;
+            ceiling.rotation.x = Math.PI / 2;
+            scene.add(ceiling);
+
+            // Walls
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0xf5f5f5, roughness: 0.9 }); // Off-white walls
+            const wallMatEvac = new THREE.MeshStandardMaterial({ color: 0xcdebcc, roughness: 0.9 }); // Light green evac wall
+
+            const wallN = new THREE.Mesh(new THREE.PlaneGeometry(30, 4), wallMat);
+            wallN.position.set(0, 2, -15);
+            wallN.receiveShadow = true;
+            scene.add(wallN);
+
+            const wallS = new THREE.Mesh(new THREE.PlaneGeometry(30, 4), wallMatEvac); // Safe wall
+            wallS.position.set(0, 2, 15);
+            wallS.rotation.y = Math.PI;
+            wallS.receiveShadow = true;
+            scene.add(wallS);
+
+            const wallE = new THREE.Mesh(new THREE.PlaneGeometry(30, 4), wallMat);
+            wallE.position.set(15, 2, 0);
+            wallE.rotation.y = -Math.PI / 2;
+            wallE.receiveShadow = true;
+            scene.add(wallE);
+
+            const wallW = new THREE.Mesh(new THREE.PlaneGeometry(30, 4), wallMat);
+            wallW.position.set(-15, 2, 0);
+            wallW.rotation.y = Math.PI / 2;
+            wallW.receiveShadow = true;
+            scene.add(wallW);
+
+            // Add decorative pillars
+            const pGeo = new THREE.BoxGeometry(0.5, 4, 0.5);
+            const pMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+            for (let x = -10; x <= 10; x += 10) {
+                if (x === 0) continue;
+                const p = new THREE.Mesh(pGeo, pMat);
+                p.position.set(x, 2, -5);
+                p.castShadow = true;
+                p.receiveShadow = true;
+                scene.add(p);
+            }
+        }
+
+        function buildLighting() {
+            // Ambient base - Brighter overall lighting
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6)); // Bright white light
+
+            // Main Room Lights (Overhead)
+            const mainLight = new THREE.PointLight(0xffffff, 0.7, 30);
+            mainLight.position.set(0, 3.8, 0);
+            scene.add(mainLight);
+
+            // Emergency Alarm Lights (Hidden initially)
+            pLight1 = new THREE.PointLight(0xff0000, 0, 20); // Red, 0 intensity
+            pLight1.position.set(0, 3.8, -5);
+            scene.add(pLight1);
+
+            pLight2 = new THREE.PointLight(0xff0000, 0, 20);
+            pLight2.position.set(0, 3.8, 5);
+            scene.add(pLight2);
+
+            // Fire Light (Flickering)
+            const fLight = new THREE.PointLight(0xff6600, 2.5, 15);
+            fLight.position.set(-8, 1, -10);
+            fLight.castShadow = true;
+            fLight.name = "fireLight";
+            scene.add(fLight);
+
+            // Exit Sign Light
+            const eLight = new THREE.PointLight(0x27ae60, 1, 10);
+            eLight.position.set(0, 3, 14.5);
+            scene.add(eLight);
+        }
+
+        function buildInteractiveObjects() {
+            // Helper function to create text labels
+            function createLabel(text, w = 256, h = 128, fontSize = 60, color = '#ffffff', bgColor = 'transparent') {
+                const canvas = document.createElement('canvas');
+                canvas.width = w; canvas.height = h;
+                const ctx = canvas.getContext('2d');
+                if (bgColor !== 'transparent') {
+                    ctx.fillStyle = bgColor; ctx.fillRect(0, 0, w, h);
+                }
+                ctx.fillStyle = color; ctx.font = `bold ${fontSize}px sans-serif`;
+                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+
+                const lines = text.split('\n');
+                const lineHeight = fontSize * 1.2;
+                const startY = (h - (lines.length - 1) * lineHeight) / 2;
+                lines.forEach((line, i) => ctx.fillText(line, w / 2, startY + i * lineHeight));
+
+                const tex = new THREE.CanvasTexture(canvas);
+                const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+                return new THREE.Mesh(new THREE.PlaneGeometry(w / 100, h / 100), mat);
+            }
+
+            // A. The Fire Source (A burning metallic barrel)
+            const barrelGroup = new THREE.Group();
+
+            // Barrel body
+            const bGeo = new THREE.CylinderGeometry(0.5, 0.5, 1.2, 32);
+            // Blackened, burnt metal texture
+            const bMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9, metalness: 0.4 });
+            const barrel = new THREE.Mesh(bGeo, bMat);
+            barrel.position.y = 0.6;
+            barrel.castShadow = true;
+            barrelGroup.add(barrel);
+
+            // Add some blackened scorch marks around the barrel base on the floor
+            const scorchMap = new THREE.CircleGeometry(1.5, 32);
+            const scorchMat = new THREE.MeshBasicMaterial({ color: 0x0a0a0a, side: THREE.DoubleSide });
+            const scorch = new THREE.Mesh(scorchMap, scorchMat);
+            scorch.rotation.x = -Math.PI / 2;
+            scorch.position.y = 0.02; // slightly above floor
+            barrelGroup.add(scorch);
+
+            barrelGroup.position.set(-8, 0, -10);
+            scene.add(barrelGroup);
+
+            // Invisible Hitbox for the Fire / Barrel
+            const fzg = new THREE.BoxGeometry(3, 4, 3);
+            const fzm = new THREE.MeshBasicMaterial({ visible: false });
+            gameObjects.fireZone = new THREE.Mesh(fzg, fzm);
+            gameObjects.fireZone.position.set(-8, 1.5, -10);
+            gameObjects.fireZone.userData = { type: 'fire' };
+            scene.add(gameObjects.fireZone);
+            interactableObjects.push(gameObjects.fireZone);
+
+            // B. Alarm Box on wall
+            const ag = new THREE.BoxGeometry(0.3, 0.5, 0.1);
+            const am = new THREE.MeshStandardMaterial({ color: 0xc0392b }); // Red
+            gameObjects.alarm = new THREE.Mesh(ag, am);
+            gameObjects.alarm.position.set(14.9, 1.5, 0);
+            gameObjects.alarm.rotation.y = -Math.PI / 2;
+            gameObjects.alarm.userData = { type: 'alarm' };
+            scene.add(gameObjects.alarm);
+            interactableObjects.push(gameObjects.alarm);
+
+            // Alarm Pull handle (visual detail)
+            const ah = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.05, 0.11), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+            ah.position.set(0, 0, 0);
+            gameObjects.alarm.add(ah);
+
+            // Alarm Label (Above)
+            const alarmLabel = createLabel("FIRE ALARM", 256, 128, 40, '#ff0000');
+            alarmLabel.position.set(14.8, 2.0, 0);
+            alarmLabel.rotation.y = -Math.PI / 2;
+            scene.add(alarmLabel);
+
+            // C. Fire Extinguisher (On wall)
+            const eg = new THREE.CylinderGeometry(0.15, 0.15, 0.8, 16);
+            const em = new THREE.MeshStandardMaterial({ color: 0xe74c3c, metalness: 0.5, roughness: 0.2 });
+            gameObjects.extinguisher = new THREE.Mesh(eg, em);
+            gameObjects.extinguisher.position.set(5, 1.2, -14.8);
+            gameObjects.extinguisher.userData = { type: 'extinguisher' };
+            scene.add(gameObjects.extinguisher);
+            interactableObjects.push(gameObjects.extinguisher);
+
+            // Extinguisher Label (Above)
+            const extLabel = createLabel("EXTINGUISHER", 300, 100, 40, '#ffffff', '#e74c3c');
+            extLabel.position.set(5, 2.2, -14.9);
+            scene.add(extLabel);
+
+            // Extinguisher detail (nozzle)
+            const nz = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.3), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+            nz.position.set(0, 0.45, 0);
+            gameObjects.extinguisher.add(nz);
+
+            // D. The Hand Extinguisher (Hidden initially inside camera)
+            gameObjects.extHand = new THREE.Mesh(eg, em);
+            gameObjects.extHand.position.set(0.4, -0.4, -0.6); // Bottom right of view
+            gameObjects.extHand.rotation.x = Math.PI / 4; // Tilted forward
+            gameObjects.extHand.visible = false;
+
+            // Particle emitter nozzle on hand extinguisher
+            const extNozzle = new THREE.Object3D();
+            extNozzle.position.set(0, 0.4, -0.1);
+            extNozzle.name = 'nozzle';
+            gameObjects.extHand.add(extNozzle);
+
+            camera.add(gameObjects.extHand);
+
+            // E. Exit Sign
+            const xg = new THREE.PlaneGeometry(1.5, 0.5);
+            // Create a canvas texture for EXIT text
+            const canvas = document.createElement('canvas');
+            canvas.width = 256; canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#27ae60'; ctx.fillRect(0, 0, 256, 128);
+            ctx.fillStyle = '#fff'; ctx.font = 'bold 80px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText('EXIT', 128, 64);
+            const tex = new THREE.CanvasTexture(canvas);
+
+            const xm = new THREE.MeshBasicMaterial({ map: tex });
+            const exit = new THREE.Mesh(xg, xm);
+            exit.position.set(0, 3, 14.9);
+            exit.rotation.y = Math.PI;
+            scene.add(exit);
+
+            // F. Safe Zone (Muster point) on floor
+            const szg = new THREE.RingGeometry(1.5, 2, 32);
+            const szm = new THREE.MeshBasicMaterial({ color: 0x27ae60, side: THREE.DoubleSide });
+            gameObjects.safeZone = new THREE.Mesh(szg, szm);
+            gameObjects.safeZone.rotation.x = -Math.PI / 2;
+            gameObjects.safeZone.position.set(0, 0.01, 10);
+            scene.add(gameObjects.safeZone);
+
+            // G. Room Decorations
+            buildRoomDecorations();
+        }
+
+        function buildRoomDecorations() {
+            // 1. A Basic Bed (Frame + Mattress + Pillow)
+            const bedGroup = new THREE.Group();
+
+            // Bed frame
+            const frameMat = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.9 }); // Dark wood
+            const frame = new THREE.Mesh(new THREE.BoxGeometry(4, 0.4, 6), frameMat);
+            frame.position.set(0, 0.2, 0);
+            bedGroup.add(frame);
+
+            const headboard = new THREE.Mesh(new THREE.BoxGeometry(4, 2, 0.2), frameMat);
+            headboard.position.set(0, 1, -2.9);
+            bedGroup.add(headboard);
+
+            // Mattress
+            const mattressMat = new THREE.MeshStandardMaterial({ color: 0xecf0f1, roughness: 1.0 }); // White/light grey
+            const mattress = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.5, 5.8), mattressMat);
+            mattress.position.set(0, 0.65, 0);
+            bedGroup.add(mattress);
+
+            // Pillow
+            const pillowMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1.0 });
+            const pillow = new THREE.Mesh(new THREE.BoxGeometry(2, 0.2, 1), pillowMat);
+            pillow.position.set(0, 0.95, -2);
+            bedGroup.add(pillow);
+
+            // Position the bed in the top left corner of the room
+            bedGroup.position.set(-12, 0, -10);
+            scene.add(bedGroup);
+
+            // 2. Nightstand (next to bed)
+            const nsGeo = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+            const nightstand = new THREE.Mesh(nsGeo, frameMat);
+            nightstand.position.set(-8.5, 0.75, -12);
+            scene.add(nightstand);
+
+            // Lamp on nightstand
+            const lampBase = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.8), new THREE.MeshStandardMaterial({ color: 0x2c3e50 }));
+            lampBase.position.set(-8.5, 1.9, -12);
+            scene.add(lampBase);
+            const lampShade = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.6, 16), new THREE.MeshStandardMaterial({ color: 0xf1c40f }));
+            lampShade.position.set(-8.5, 2.5, -12);
+            scene.add(lampShade);
+
+            // 3. Tall Shelf / Wardrobe on the right wall
+            const wardMat = new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.8 }); // Medium brown wood
+            const wardrobe = new THREE.Mesh(new THREE.BoxGeometry(2, 6, 4), wardMat);
+            wardrobe.position.set(13.8, 3, -10);
+            scene.add(wardrobe);
+
+            // Smaller Wall Shelf
+            const shelfMat = new THREE.MeshStandardMaterial({ color: 0x7f8c8d, metalness: 0.5, roughness: 0.5 });
+            const wallShelf = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.1, 4), shelfMat);
+            wallShelf.position.set(-14.7, 3, 0);
+            scene.add(wallShelf);
+
+            // 4. Wooden Crates/Boxes on the floor (scattered decor)
+            const crateMat = new THREE.MeshStandardMaterial({ color: 0xd35400, roughness: 0.9 });
+            const cGeo = new THREE.BoxGeometry(1.2, 1.2, 1.2);
+
+            const crate1 = new THREE.Mesh(cGeo, crateMat);
+            crate1.position.set(-8, 0.6, 6);
+            scene.add(crate1);
+
+            const crate2 = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1, 1.5), crateMat);
+            crate2.position.set(10, 0.5, -6);
+            scene.add(crate2);
+
+            const crate3 = new THREE.Mesh(cGeo, crateMat);
+            crate3.position.set(10, 1.6, -6); // stacked
+            crate3.rotation.y = 0.2;
+            scene.add(crate3);
+
+            // 5. A closed metal door underneath the EXIT sign
+            const doorGeo = new THREE.BoxGeometry(2.5, 4, 0.1);
+            const doorMat = new THREE.MeshStandardMaterial({ color: 0x95a5a6, metalness: 0.5 });
+            const door = new THREE.Mesh(doorGeo, doorMat);
+            door.position.set(0, 2, 14.8);
+            scene.add(door);
+        }
+
+        function buildParticleSystems() {
+            // Basic sprite texture for particles
+            const canvas = document.createElement('canvas');
+            canvas.width = 32; canvas.height = 32;
+            const context = canvas.getContext('2d');
+            const gradient = context.createRadialGradient(16, 16, 0, 16, 16, 16);
+            gradient.addColorStop(0, 'rgba(255,255,255,1)');
+            gradient.addColorStop(1, 'rgba(0,0,0,0)');
+            context.fillStyle = gradient;
+            context.fillRect(0, 0, 32, 32);
+            const texture = new THREE.CanvasTexture(canvas);
+
+            // 1. Fire Particles (Orange/Red)
+            const fGeo = new THREE.BufferGeometry();
+            const fCount = 300;
+            const fPositions = new Float32Array(fCount * 3);
+            const fSizes = new Float32Array(fCount);
+
+            for (let i = 0; i < fCount; i++) {
+                fPositions[i * 3] = (Math.random() - 0.5) * 2; // x spread
+                fPositions[i * 3 + 1] = Math.random() * 2; // y spread
+                fPositions[i * 3 + 2] = (Math.random() - 0.5) * 2; // z spread
+                fSizes[i] = Math.random() * 2 + 1;
+            }
+            fGeo.setAttribute('position', new THREE.BufferAttribute(fPositions, 3));
+            fGeo.setAttribute('size', new THREE.BufferAttribute(fSizes, 1));
+
+            const fMat = new THREE.PointsMaterial({
+                size: 1.5, map: texture, transparent: true, opacity: 0.8,
+                blending: THREE.AdditiveBlending, depthWrite: false, color: 0xff6600
+            });
+
+            fireParticles = new THREE.Points(fGeo, fMat);
+            fireParticles.position.set(-8, 0.5, -10);
+            scene.add(fireParticles);
+
+            // 2. Smoke Particles (Dark Grey)
+            smokeParticles = new THREE.Points(fGeo.clone(), new THREE.PointsMaterial({
+                size: 3, map: texture, transparent: true, opacity: 0.4,
+                depthWrite: false, color: 0x222222
+            }));
+            smokeParticles.position.set(-8, 2, -10);
+            scene.add(smokeParticles);
+
+            // 3. Extinguisher Spray Particles (White, hidden initially)
+            const sGeo = new THREE.BufferGeometry();
+            const sCount = 500;
+            const sPos = new Float32Array(sCount * 3);
+            for (let i = 0; i < sCount * 3; i++) sPos[i] = 0;
+            sGeo.setAttribute('position', new THREE.BufferAttribute(sPos, 3));
+
+            fireSystem.sprayMat = new THREE.PointsMaterial({
+                size: 0.5, map: texture, transparent: true, opacity: 0.5,
+                blending: THREE.AdditiveBlending, depthWrite: false, color: 0xffffff
+            });
+            fireSystem.spray = new THREE.Points(sGeo, fireSystem.sprayMat);
+            fireSystem.spray.visible = false;
+            scene.add(fireSystem.spray);
+        }
+
+        // --- Interaction Handlers ---
+
+        function updateUIState(newStepTitle, newStepText, borderCol) {
+            uiTitle.innerText = newStepTitle;
+            uiText.innerText = newStepText;
+            uiPanel.style.borderLeftColor = borderCol;
+        }
+
+        function onMouseClick() {
+            if (!controls.isLocked) return;
+
+            if (hoveredObject) {
+                const type = hoveredObject.userData.type;
+
+                // STEP 1: Identify Fire
+                if (type === 'fire' && state.step === 0) {
+                    state.step = 1;
+                    updateUIState("Step 2: Sound Alarm", "Find the RED FIRE ALARM box on the wall and pull it.", "#E67E22");
+                }
+
+                // STEP 2: Pull Alarm
+                else if (type === 'alarm') {
+                    if (state.step < 1) {
+                        uiText.innerText = "WARNING: Verify the hazard before activating the alarm!";
+                        setTimeout(() => updateUIState("Step 1: Identify Hazard", "Find the source of the fire in the room.", "#E74C3C"), 2000);
+                    } else if (state.step === 1 && !state.hasAlarm) {
+                        state.hasAlarm = true;
+                        state.step = 2;
+                        sounds.alarm.play(); // Start siren
+                        updateUIState("Step 3: Locate Extinguisher", "Find the red Fire Extinguisher on the wall and grab it.", "#F1C40F");
+                    }
+                }
+
+                // STEP 3: Grab Extinguisher
+                else if (type === 'extinguisher') {
+                    if (state.step < 2) {
+                        uiText.innerText = "WARNING: Follow protocol. You must trigger the alarm first!";
+                    } else if (state.step === 2 && !state.hasExtinguisher) {
+                        state.hasExtinguisher = true;
+                        state.step = 3;
+                        gameObjects.extinguisher.visible = false; // remove from wall
+                        gameObjects.extHand.visible = true; // show in hand
+                        updateUIState("Step 4: Suppress Fire", "Aim at the base of the fire. HOLD LEFT CLICK to spray.", "#3498DB");
+                        progContainer.style.display = "block"; // Show health bar
+                        progBar.style.width = "100%";
+                    }
+                }
+            }
+
+            // STEP 4: Spray Extinguisher (Mouse Down logic)
+            if (state.hasExtinguisher && state.step === 3) {
+                fireSystem.isSpraying = true;
+                fireSystem.spray.visible = true;
+                sounds.extinguisher.play();
+            }
+        }
+
+        function onMouseUp() {
+            if (fireSystem.isSpraying) {
+                fireSystem.isSpraying = false;
+                fireSystem.spray.visible = false;
+                sounds.extinguisher.pause();
+                sounds.extinguisher.currentTime = 0;
+            }
+        }
+
+        // --- Render Loop ---
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const time = performance.now();
+            const delta = (time - prevTime) / 1000;
+
+            // 1. Raycaster / Interaction Crosshair Check
+            if (controls.isLocked) {
+                raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+                const intersects = raycaster.intersectObjects(interactableObjects);
+
+                if (intersects.length > 0 && intersects[0].distance < 8) {
+                    if (hoveredObject !== intersects[0].object) {
+                        hoveredObject = intersects[0].object;
+                        crosshair.classList.add('active');
+                    }
+
+                    // Specific logic for pointing at fire while spraying
+                    if (hoveredObject.userData.type === 'fire' && fireSystem.isSpraying && state.step === 3) {
+                        fireSystem.health -= delta * 30; // 30 health per second
+                        progBar.style.width = Math.max(0, fireSystem.health) + "%";
+
+                        if (fireSystem.health <= 0 && !state.fireOut) {
+                            state.fireOut = true;
+                            state.step = 4;
+                            fireSystem.active = false;
+                            fireParticles.visible = false;
+                            smokeParticles.visible = false;
+                            // Turn off fire light
+                            scene.getObjectByName("fireLight").intensity = 0;
+
+                            updateUIState("Step 5: Evacuate!", "Fire suppressed. Follow the glowing EXIT signs to the Safe Zone on the floor.", "#2ECC71");
+                            progContainer.style.display = "none";
+                            sounds.alarm.pause(); // Turn off annoying siren
+                        }
+                    }
+                } else {
+                    if (hoveredObject) {
+                        hoveredObject = null;
+                        crosshair.classList.remove('active');
+                    }
+                }
+            }
+
+            // 2. Movement Physics
+            if (controls.isLocked) {
+                velocity.x -= velocity.x * 10.0 * delta; // Friction
+                velocity.z -= velocity.z * 10.0 * delta;
+
+                direction.z = Number(moveForward) - Number(moveBackward);
+                direction.x = Number(moveRight) - Number(moveLeft);
+                direction.normalize();
+
+                const speed = 40.0;
+                if (moveForward || moveBackward) velocity.z -= direction.z * speed * delta;
+                if (moveLeft || moveRight) velocity.x -= direction.x * speed * delta;
+
+                controls.moveRight(-velocity.x * delta);
+                controls.moveForward(-velocity.z * delta);
+
+                // Keep player in bounds (simple box collision)
+                const pos = controls.getObject().position;
+                if (pos.x < -14) pos.x = -14;
+                if (pos.x > 14) pos.x = 14;
+                if (pos.z < -14) pos.z = -14;
+                if (pos.z > 14) pos.z = 14;
+                pos.y = 1.6; // Lock Y
+
+                // Check Evacuation Zone
+                if (state.step === 4) {
+                    const dz = Math.sqrt(Math.pow(pos.x - 0, 2) + Math.pow(pos.z - 10, 2));
+                    if (dz < 2 && !state.evacuated) {
+                        state.evacuated = true;
+                        updateUIState("MISSION COMPLETE", "You have successfully neutralized the hazard and evacuated safely. Well done.", "#27AE60");
+                        document.getElementById('instruction-panel').style.background = "rgba(39, 174, 96, 0.4)";
+                    }
+                }
+            }
+
+            // 3. Animations & Particles
+
+            // A. Fire and Smoke Animation
+            if (fireSystem.active) {
+                // Flickering light
+                const fl = scene.getObjectByName("fireLight");
+                fl.intensity = 2 + Math.random();
+
+                // Scale fire based on health
+                const scale = fireSystem.health / 100;
+                fireParticles.scale.set(scale, scale, scale);
+
+                // Animate fire particles up
+                const positions = fireParticles.geometry.attributes.position.array;
+                for (let i = 1; i < positions.length; i += 3) {
+                    positions[i] += delta * 2; // move up
+                    if (positions[i] > 3) { // reset to bottom
+                        positions[i] = 0;
+                        positions[i - 1] = (Math.random() - 0.5) * 2; // jitter x
+                        positions[i + 1] = (Math.random() - 0.5) * 2; // jitter z
+                    }
+                }
+                fireParticles.geometry.attributes.position.needsUpdate = true;
+
+                // Animate smoke particles
+                const sp = smokeParticles.geometry.attributes.position.array;
+                for (let i = 1; i < sp.length; i += 3) {
+                    sp[i] += delta * 3;
+                    sp[i - 1] += (Math.random() - 0.5) * delta; // wander x
+                    if (sp[i] > 8) sp[i] = 2; // reset
+                }
+                smokeParticles.geometry.attributes.position.needsUpdate = true;
+            }
+
+            // B. Alarm Flashing Lights
+            if (state.hasAlarm && !state.fireOut) {
+                // Flash on/off every 0.5 sec
+                const flash = Math.sin(time * 0.005) > 0 ? 3 : 0.2;
+                pLight1.intensity = flash;
+                pLight2.intensity = flash;
+            } else {
+                pLight1.intensity = 0;
+                pLight2.intensity = 0;
+            }
+
+            // C. Extinguisher Spray Animation
+            if (fireSystem.isSpraying && state.hasExtinguisher) {
+                // Shake the extinguisher model slightly for recoil effect
+                gameObjects.extHand.position.z = -0.6 + (Math.random() - 0.5) * 0.02;
+                gameObjects.extHand.position.x = 0.4 + (Math.random() - 0.5) * 0.01;
+
+                // Get world position/direction of nozzle
+                const nozzle = gameObjects.extHand.getObjectByName('nozzle');
+                const pPos = new THREE.Vector3();
+                nozzle.getWorldPosition(pPos);
+
+                const dir = new THREE.Vector3(0, 0, -1);
+                dir.applyQuaternion(camera.quaternion); // shoot outward
+
+                // Update spray particle positions simulating physics
+                const sprayArr = fireSystem.spray.geometry.attributes.position.array;
+                for (let i = 0; i < sprayArr.length; i += 3) {
+                    // if at origin, shoot it forward
+                    if (sprayArr[i] === 0 && sprayArr[i + 1] === 0 && sprayArr[i + 2] === 0) {
+                        sprayArr[i] = pPos.x + (Math.random() - 0.5) * 0.2;
+                        sprayArr[i + 1] = pPos.y + (Math.random() - 0.5) * 0.2;
+                        sprayArr[i + 2] = pPos.z + (Math.random() - 0.5) * 0.2;
+                    } else {
+                        // move existing particles along direction vector
+                        sprayArr[i] += dir.x * delta * 15;
+                        sprayArr[i + 1] += (dir.y * delta * 15) - (delta * 0.5); // arc down (gravity)
+                        sprayArr[i + 2] += dir.z * delta * 15;
+
+                        // recycle if too far away or below floor
+                        if (Math.random() < 0.05 || sprayArr[i + 1] < 0) {
+                            sprayArr[i] = 0; sprayArr[i + 1] = 0; sprayArr[i + 2] = 0;
+                        }
+                    }
+                }
+                fireSystem.spray.geometry.attributes.position.needsUpdate = true;
+            }
+
+            renderer.render(scene, camera);
+            prevTime = time;
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+    </script>
+</body>
+
+</html>
