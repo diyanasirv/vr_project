@@ -4,7 +4,6 @@
 
 A 3D fire safety training simulation built with **Three.js** to educate users on identifying fire hazards and responding appropriately in emergency situations. The application provides an interactive first-person experience with VR support for enhanced immersion.
 
----
 
 ## 🎯 Overview
 
